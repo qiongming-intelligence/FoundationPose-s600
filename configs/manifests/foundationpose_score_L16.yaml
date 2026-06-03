@@ -1,0 +1,31 @@
+# FoundationPose ScoreNetMultiPair (L=16) — S600 BPU manifest
+#
+# Binds the compiled ScoreNet HBM (pairs-per-group L=16 baked in) to the C++
+# runtime. Tensor names/shapes/dtypes must match
+# build/foundationpose_export/contracts/score_net_L16.json and the compiled HBM.
+
+model:
+  name: score_net_L16
+  hbm: models/hbm/foundationpose_score_net_L16.hbm
+  upstream_callable: ScoreNetMultiPair.forward
+
+inputs:
+  - name: A           # rendered crops: rgb(3) + xyz_map(3), one per pose pair
+    dtype: float32
+    shape: [16, 6, 160, 160]
+    layout: NCHW
+  - name: B           # observed crops
+    dtype: float32
+    shape: [16, 6, 160, 160]
+    layout: NCHW
+
+outputs:
+  - name: score_logit  # per-pair score; argmax/tournament selection on CPU
+    dtype: float32
+    shape: [1, 16]
+
+runtime:
+  core_id: [1, 2]
+  # L=16 is compiled in. For a different candidate count use the L64 manifest /
+  # contract, or export a new score_net_L<N>. The iterative best-pair tournament
+  # in predict_score.py stays on CPU/GPU.

@@ -1,0 +1,53 @@
+# Vendored upstream (NVIDIA-proprietary; do not redistribute)
+# Cloned locally via scripts/fetch_upstream.sh at the pinned SHA in docs/upstream_pin.md
+third_party/FoundationPose/
+
+# Build artifacts
+build/
+build-*/
+build*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Generated models, weights, calibration tensors
+*.hbm
+*.onnx
+*.onnx.data
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.npy
+*.npz
+models/hbm/
+models/onnx/
+models/upstream/
+weights/
+.toolchain_downloads/
+
+# Calibration / benchmark / debug outputs
+configs/calibration/data/
+benchmarks/results/*
+!benchmarks/results/.gitkeep
+*.csv
+*.jsonl
+outputs/
+logs/
+/debug/
+
+# Export work dir
+build/foundationpose_export/
+
+# Python tooling
+__pycache__/
+*.pyc
+.venv/
+.env
+*.egg-info/
+
+# Editors
+.vscode/
+.idea/
+*.swp

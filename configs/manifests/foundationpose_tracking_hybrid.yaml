@@ -1,0 +1,30 @@
+# FoundationPose hybrid tracking pipeline — S600 partition map
+#
+# Documents which stages run where for the registration/tracking loop. Only the
+# two learning subgraphs are on the BPU; everything else stays on CPU/GPU/Python.
+# See docs/rendering_split.md for the rationale.
+
+pipeline: foundationpose_tracking_hybrid
+
+bpu_models:
+  - manifest: configs/manifests/foundationpose_refine.yaml
+    role: pose_refinement      # RefineNet, iterated (default 5) per frame
+  - manifest: configs/manifests/foundationpose_score_L16.yaml
+    role: candidate_scoring    # ScoreNetMultiPair, registration / re-detect
+
+host_stages:                   # CPU/GPU/Python — NOT compiled to HBM
+  - mesh_setup                 # load/center mesh, diameter, symmetry, rotation grid
+  - depth_preprocess           # erosion / bilateral filter, depth -> XYZ map
+  - render                     # nvdiffrast CUDA rasterization of pose hypotheses
+  - crop_warp                  # kornia warp_perspective to 160x160 crops -> A,B
+  - assemble_input             # concat rgb(3)+xyz(3) -> 6ch tensors for BPU
+  - pose_decode                # trans/rot delta decode, SE(3) composition
+  - candidate_select           # cluster_poses, argmax/tournament, top-k
+
+dataflow:
+  # host renders+crops -> BPU refine (x iterations) -> host pose update ->
+  # host renders candidates -> BPU score -> host selects best pose
+  refine_iterations: 5
+  notes:
+    - "A = rendered crop (hypothesis), B = observed crop; both 6ch rgb+xyz."
+    - "BPU returns raw deltas/logits; all geometry decode is on host."

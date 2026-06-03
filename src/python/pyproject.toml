@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "foundationpose-s600-tools"
+version = "0.1.0"
+description = "FoundationPose ONNX/HBM export and S600 runtime tooling"
+requires-python = ">=3.10"
+dependencies = [
+  "onnx>=1.14",
+]
+
+[project.optional-dependencies]
+export = [
+  "torch",
+  "omegaconf",
+  "onnxruntime",
+  "numpy",
+]
+precision = [
+  "onnxconverter-common",
+]
+
+[tool.setuptools]
+package-dir = {"" = "."}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["foundationpose_s600_tools*"]

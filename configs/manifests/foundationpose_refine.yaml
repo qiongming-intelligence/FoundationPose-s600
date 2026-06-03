@@ -1,0 +1,34 @@
+# FoundationPose RefineNet — S600 BPU manifest
+#
+# Binds the compiled RefineNet HBM to the C++ runtime by exact tensor names.
+# Tensor names/shapes/dtypes must match the export contract
+# (build/foundationpose_export/contracts/refine_net.json) and the compiled HBM
+# (verify with: src/python/scripts/inspect_hbm.sh <hbm> <contract>).
+
+model:
+  name: refine_net
+  hbm: models/hbm/foundationpose_refine_net.hbm
+  upstream_callable: RefineNet.forward
+
+inputs:
+  - name: A           # rendered crop: rgb(3) + xyz_map(3)
+    dtype: float32
+    shape: [1, 6, 160, 160]
+    layout: NCHW
+  - name: B           # observed crop: rgb(3) + xyz_map(3)
+    dtype: float32
+    shape: [1, 6, 160, 160]
+    layout: NCHW
+
+outputs:
+  - name: trans       # translation delta (raw; decode on CPU via trans_rep)
+    dtype: float32
+    shape: [1, 3]
+  - name: rot         # rotation delta (raw; decode on CPU via rot_rep)
+    dtype: float32
+    shape: [1, 3]
+
+runtime:
+  core_id: [1, 2]     # both S600 BPU cores
+  # N (batch of candidates) is fixed at compile time; re-export + recompile to
+  # change it. Pose-delta decode and SE(3) composition stay on CPU/GPU.
