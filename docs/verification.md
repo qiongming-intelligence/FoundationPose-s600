@@ -82,8 +82,9 @@ Current S600 smoke results to keep in mind:
   ran at about 17.2 s/infer.
 - RefineNet deployable baseline is currently
   `models/hbm_opt_int16_smoke/foundationpose_refine_net_opt_int16_core1.hbm`:
-  full BPU (`NODE_INFO={}`, `CORE_NUM=1`), about 2–3 ms/infer, formula-smoke
-  `trans L2≈0.0074`, `rot L2≈0.0030` vs ONNX.
+  full BPU (`NODE_INFO={}`, `CORE_NUM=1`) with no CPU fallback. Current formula
+  smoke vs ONNX: `trans L2≈0.0074`, `rot L2≈0.0030`; profiler latency is
+  ≈1.96 ms single-core / ≈1.97 ms dual-core (BPU≈1.93–1.94 ms, CPU=0 ms).
 - ScoreNet skip/random-calibrated L16/L64 collapsed logits to a constant, so
   top-1/rank gates failed even though ABI and performance looked good.
 - ScoreNet full-BPU int16 core1 runs, but is not precision-aligned on current
