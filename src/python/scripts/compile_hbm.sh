@@ -10,11 +10,13 @@
 #   CONTRACT_DIR : build/foundationpose_export/contracts (from export.contract)
 #   OUTPUT_DIR   : where HBM + generated configs land (default models/hbm)
 #
-# Env knobs (FP32 baseline by default):
-#   HB_COMPILE_OPTIMIZE_LEVEL  O0|O1|O2|O3   (default O2)
-#   HB_COMPILE_CORE_NUM        1|2           (default 2; both S600 BPU cores)
-#   HB_COMPILE_MODE            latency|bandwidth (default latency)
-#   HB_COMPILE_MARCH           default nash-p
+# Env knobs:
+#   HB_COMPILE_OPTIMIZE_LEVEL   O0|O1|O2|O3   (default O2)
+#   HB_COMPILE_CORE_NUM         1|2           (default 2; both S600 BPU cores)
+#   HB_COMPILE_MODE             latency|bandwidth (default latency)
+#   HB_COMPILE_MARCH            default nash-p
+#   HB_COMPILE_CALIBRATION_TYPE skip|max|...   (default skip; skip uses random/fixed calibration in hb_compile 3.5.3 and is NOT deployable for ScoreNet)
+#   HB_COMPILE_CALIB_DATA_ROOT  root containing <partition>/<input_name>/*.npy|*.bin calibration tensors when calibration_type != skip
 set -euo pipefail
 
 usage() {
@@ -28,6 +30,7 @@ fi
 
 contract_dir="$1"
 output_dir="${2:-models/hbm}"
+output_dir_abs="$(realpath -m "$output_dir")"
 
 if [[ ! -d "$contract_dir" ]]; then
   echo "contract directory does not exist: $contract_dir" >&2
@@ -48,6 +51,29 @@ march="${HB_COMPILE_MARCH:-nash-p}"
 optimize_level="${HB_COMPILE_OPTIMIZE_LEVEL:-O2}"
 core_num="${HB_COMPILE_CORE_NUM:-2}"
 compile_mode="${HB_COMPILE_MODE:-latency}"
+calibration_type="${HB_COMPILE_CALIBRATION_TYPE:-skip}"
+calib_data_root="${HB_COMPILE_CALIB_DATA_ROOT:-}"
+
+if [[ "$calibration_type" == "skip" ]]; then
+  cat >&2 <<'EOF'
+WARNING: HB_COMPILE_CALIBRATION_TYPE=skip is for ABI/perf smoke only.
+D-Robotics hb_compile 3.5.3 still inserts fixed/random calibration when no
+calibration data is provided; FoundationPose ScoreNet can collapse to constant
+logits under that mode. Use real captured A/B tensors with
+HB_COMPILE_CALIBRATION_TYPE=max and HB_COMPILE_CALIB_DATA_ROOT for deployable
+accuracy candidates.
+EOF
+else
+  if [[ -z "$calib_data_root" ]]; then
+    echo "HB_COMPILE_CALIB_DATA_ROOT is required when HB_COMPILE_CALIBRATION_TYPE=$calibration_type" >&2
+    exit 1
+  fi
+  if [[ ! -d "$calib_data_root" ]]; then
+    echo "calibration data root does not exist: $calib_data_root" >&2
+    exit 1
+  fi
+  calib_data_root="$(realpath -m "$calib_data_root")"
+fi
 
 mkdir -p "$output_dir"
 config_dir="$output_dir/hb_compile_configs"
@@ -94,15 +120,39 @@ PY
     echo "missing ONNX for $base: $onnx_path (export it first on the x86 host)" >&2
     exit 1
   fi
+  onnx_path_abs="$(realpath -m "$onnx_path")"
+
+  calibration_yaml="  calibration_type: \"$calibration_type\""
+  if [[ "$calibration_type" != "skip" ]]; then
+    IFS=';' read -r -a input_name_array <<<"$input_names"
+    calib_dirs=()
+    calib_types=()
+    for input_name in "${input_name_array[@]}"; do
+      calib_dir="$calib_data_root/$name/$input_name"
+      if [[ ! -d "$calib_dir" ]]; then
+        echo "missing calibration dir for $name input $input_name: $calib_dir" >&2
+        echo "expected layout: $calib_data_root/$name/$input_name/000000.npy (or .bin)" >&2
+        exit 1
+      fi
+      if ! find "$calib_dir" -maxdepth 1 -type f \( -name '*.npy' -o -name '*.bin' \) | grep -q .; then
+        echo "no .npy/.bin calibration tensors found in: $calib_dir" >&2
+        exit 1
+      fi
+      calib_dirs+=("$calib_dir")
+      calib_types+=("float32")
+    done
+    calib_data_dir="$(IFS=';'; echo "${calib_dirs[*]}")"
+    calib_data_type="$(IFS=';'; echo "${calib_types[*]}")"
+    calibration_yaml+=$'\n'"  cal_data_dir: \"$calib_data_dir\""
+    calibration_yaml+=$'\n'"  cal_data_type: \"$calib_data_type\""
+  fi
 
   cat >"$config_path" <<EOF
 model_parameters:
-  onnx_model: "$onnx_path"
+  onnx_model: "$onnx_path_abs"
   march: "$march"
-  working_dir: "$output_dir"
+  working_dir: "$output_dir_abs"
   output_model_file_prefix: "$prefix"
-  core_num: $core_num
-  compile_mode: "$compile_mode"
 
 input_parameters:
   input_name: "$input_names"
@@ -113,10 +163,12 @@ input_parameters:
   norm_type: "no_preprocess"
 
 calibration_parameters:
-  calibration_type: "skip"
+$calibration_yaml
 
 compiler_parameters:
   optimize_level: "$optimize_level"
+  core_num: $core_num
+  compile_mode: "$compile_mode"
 EOF
   echo "converting $onnx_path -> $output_dir/$hbm_name (march=$march core_num=$core_num mode=$compile_mode $optimize_level)"
   hb_compile --config "$config_path"

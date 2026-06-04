@@ -58,15 +58,51 @@ Checks:
 - Sweep `core_num=1/2`, `O1/O2/O3`, `latency/bandwidth`; choose by measured
   latency and CPU fallback, not by assumption.
 
-## Milestone 4 — PyTorch vs HBM tensor parity
+## Milestone 4 — PyTorch/ONNX vs HBM tensor parity
 
 Using real captured intermediate tensors (not random inputs), compare:
 
-- RefineNet PyTorch output vs HBM output for `trans` and `rot`.
-- ScoreNet PyTorch output vs HBM output for `score_logit`.
+- RefineNet PyTorch/ONNX output vs HBM output for `trans` and `rot`.
+- ScoreNet PyTorch/ONNX output vs HBM output for `score_logit`.
 
-Recommended tolerances for FP32 HBM: start with `atol=1e-3, rtol=1e-3`, then
-tighten/relax based on actual BPU numeric behavior and final pose impact.
+Start with `atol=1e-3, rtol=1e-3` for smoke tests, then judge by final pose
+impact. For S600 hb_compile 3.5.3, `calibration_type: skip` is **not** a true
+FP32 pass-through in practice: it may run fixed/random calibration when no
+calibration data is provided. Treat skip-calibrated HBM as ABI/perf smoke only.
+
+Current S600 smoke results to keep in mind:
+
+- Precision policy: do not quantize just for the sake of quantization. On S600,
+  `hb_compile` has no true all-FP32 BPU path, so a BPU HBM is necessarily a
+  reduced-precision deployment artifact. True FP32 can be preserved only by
+  forcing nodes to the CPU with `node_info`; that is valid as an accuracy golden
+  or as an intentional hybrid fallback for small, sensitive layers.
+- CPU-float HBM is an accuracy golden only, not a deployable target. RefineNet
+  CPU-float matched ONNX to `trans max_abs≈2.8e-8`, `rot max_abs≈3.1e-7`, but
+  ran at about 17.2 s/infer.
+- RefineNet deployable baseline is currently
+  `models/hbm_opt_int16_smoke/foundationpose_refine_net_opt_int16_core1.hbm`:
+  full BPU (`NODE_INFO={}`, `CORE_NUM=1`), about 2–3 ms/infer, formula-smoke
+  `trans L2≈0.0074`, `rot L2≈0.0030` vs ONNX.
+- ScoreNet skip/random-calibrated L16/L64 collapsed logits to a constant, so
+  top-1/rank gates failed even though ABI and performance looked good.
+- ScoreNet full-BPU int16 core1 runs, but is not precision-aligned on current
+  formula-smoke ranking gates: L16 top-5=3/5, Spearman≈0.61; L64 top-1 failed,
+  top-5=2/5, Spearman≈0.32. Mean-centering the output fixed output scale but
+  not internal attention/head quantization error.
+- Small CPU-fallback ScoreNet sweeps (7/11/12/15/18/34 CPU nodes) either missed
+  top-1 or top-5 and were not better than the stable candidate.
+- The current ScoreNet deployable candidate is
+  `models/hbm_core1_sweep/foundationpose_score_net_L16_cpu_cross_head_core1.hbm`
+  / `foundationpose_score_net_L64_cpu_cross_head_core1.hbm`: encoder/self-attn
+  stays on BPU, cross-attention/head stays float on CPU. Formula-smoke metrics:
+  L16 top-1/top-5/top-10 all match, Spearman≈0.994; profiler latency is
+  ≈44.25 ms dual-core (BPU≈20.65 ms, CPU≈23.49 ms). L64 top-1/top-10 match,
+  top-5=4/5, Spearman≈0.986; profiler latency is ≈178.15 ms single-core
+  (BPU≈83.49 ms, CPU≈94.39 ms).
+
+Real captured `cal_data_dir` tensors are still mandatory for final deployment
+sign-off, because formula tensors do not prove FoundationPose pose accuracy.
 
 ## Milestone 5 — FoundationPose-level accuracy gate
 

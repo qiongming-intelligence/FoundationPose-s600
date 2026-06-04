@@ -27,8 +27,40 @@ lines), across a representative spread:
 - both registration and tracking frames.
 
 Aim for a few hundred to a few thousand pairs per network.
-`src/python/foundationpose_s600_tools/debug/dump_intermediates.py` (hybrid path)
-is the intended capture hook.
+
+## Capture hook
+
+Wrap already-created upstream predictors:
+
+```python
+from foundationpose_s600_tools.debug.dump_intermediates import wrap_foundationpose_predictors
+
+# after constructing the FoundationPose estimator / predictors
+wrap_foundationpose_predictors(
+    refine_predictor=est.refiner,     # or your PoseRefinePredictor instance
+    score_predictor=est.scorer,       # or your ScorePredictor instance
+    out_root="configs/calibration/data/raw_capture",
+    limit=2000,
+)
+```
+
+Or patch predictor constructors before they are created:
+
+```python
+from foundationpose_s600_tools.debug.dump_intermediates import install_auto_capture
+install_auto_capture(out_root="configs/calibration/data/raw_capture", limit=2000)
+```
+
+Useful environment knobs:
+
+```bash
+export FOUNDATIONPOSE_S600_CAPTURE_DIR=configs/calibration/data/raw_capture
+export FOUNDATIONPOSE_S600_CAPTURE_LIMIT=2000
+export FOUNDATIONPOSE_S600_CAPTURE_SCORE_L=16,64
+```
+
+The hook dumps `.npy` float32 tensors and never raises into the pose pipeline if a
+capture write fails.
 
 ## Layout
 
@@ -55,3 +87,30 @@ frames, upstream SHA) in a sidecar `manifest.json` you keep out of git.
 A quantized HBM that fails these gates is not deployable regardless of latency —
 see docs/verification.md. Do not assume INT8 is faster: on the SAM_s600 detector
 graph, whole-graph INT8 PTQ was *slower* than FP32 on S600.
+
+## Preparing `cal_data_dir` for hb_compile
+
+Once captures exist in the layout above, validate and stage them with:
+
+```bash
+PYTHONPATH=src/python python3 -m foundationpose_s600_tools.debug.prepare_calibration \
+  --source-root configs/calibration/data/raw_capture \
+  --out-root configs/calibration/data/hb_compile_real \
+  --mode symlink
+```
+
+The helper writes one directory per partition input, e.g.
+`configs/calibration/data/hb_compile_real/score_net_L16/A/*.npy`, and a
+`manifest.json` containing the exact semicolon-separated `cal_data_dir` strings.
+
+Compile calibrated candidates on the x86 toolchain host with:
+
+```bash
+HB_COMPILE_CALIBRATION_TYPE=max \
+HB_COMPILE_CALIB_DATA_ROOT=configs/calibration/data/hb_compile_real \
+src/python/scripts/compile_hbm.sh build/foundationpose_export/contracts models/hbm_real_calib
+```
+
+Do **not** treat `calibration_type: skip` as deployable. With hb_compile 3.5.3 it
+still ran fixed/random calibration in our tests; the resulting ScoreNet HBM
+collapsed logits to a constant and failed top-1/rank gates.
