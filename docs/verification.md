@@ -81,10 +81,17 @@ Current S600 smoke results to keep in mind:
   CPU-float matched ONNX to `trans max_abs≈2.8e-8`, `rot max_abs≈3.1e-7`, but
   ran at about 17.2 s/infer.
 - RefineNet deployable baseline is currently
-  `models/hbm_opt_int16_smoke/foundationpose_refine_net_opt_int16_core1.hbm`:
-  full BPU (`NODE_INFO={}`, `CORE_NUM=1`) with no CPU fallback. Current formula
-  smoke vs ONNX: `trans L2≈0.0074`, `rot L2≈0.0030`; profiler latency is
-  ≈1.96 ms single-core / ≈1.97 ms dual-core (BPU≈1.93–1.94 ms, CPU=0 ms).
+  `models/hbm_refine_formula64/foundationpose_refine_net_formula64_int16_no_output_core1.hbm`:
+  full BPU (`NODE_INFO={}`, `CORE_NUM=1`) with no CPU fallback,
+  `calibration_type=max`, 64 formula calibration samples, and
+  `optimization=set_all_nodes_int16` **without** `set_model_output_int16`.
+  Against the board-side CPU-float HBM golden over 8 formula samples:
+  `trans L2_mean≈0.0056` (`max_abs_max≈0.0134`) and `rot L2_mean≈0.0098`
+  (`max_abs_max≈0.0137`). Profiler latency is ≈1.95 ms single-core /
+  ≈1.96 ms dual-core (BPU≈1.92–1.93 ms, CPU=0 ms). The older
+  `foundationpose_refine_net_opt_int16_core1.hbm` used single-sample calibration
+  plus `set_model_output_int16` and clipped `trans` outputs, so it is no longer
+  the deployable RefineNet candidate.
 - ScoreNet skip/random-calibrated L16/L64 collapsed logits to a constant, so
   top-1/rank gates failed even though ABI and performance looked good.
 - ScoreNet full-BPU int16 core1 runs, but is not precision-aligned on current
