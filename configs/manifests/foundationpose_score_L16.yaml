@@ -1,12 +1,14 @@
 # FoundationPose ScoreNetMultiPair (L=16) — S600 BPU manifest
 #
-# Binds the compiled ScoreNet HBM (pairs-per-group L=16 baked in) to the C++
-# runtime. Tensor names/shapes/dtypes must match
+# Small fixed-L ScoreNet manifest. L16 passed earlier fallback smoke, but the
+# latest local board state shows this real-int16 HBM failing model_info with
+# hbrt4 multi-core IOVA parse errors. Revalidate loadability on the exact target;
+# latest E2E Score BPU smoke used L32. Tensor names/shapes/dtypes here must match
 # build/foundationpose_export/contracts/score_net_L16.json and the compiled HBM.
 
 model:
   name: score_net_L16
-  hbm: models/hbm/foundationpose_score_net_L16.hbm
+  hbm: models/hbm_real_int16/foundationpose_score_net_L16_real_int16_no_output.hbm
   upstream_callable: ScoreNetMultiPair.forward
 
 inputs:
@@ -26,6 +28,7 @@ outputs:
 
 runtime:
   core_id: [1, 2]
-  # L=16 is compiled in. For a different candidate count use the L64 manifest /
-  # contract, or export a new score_net_L<N>. The iterative best-pair tournament
-  # in predict_score.py stays on CPU/GPU.
+  # L=16 is compiled in. For a larger attention scope use another fixed-L HBM
+  # such as L20 or L32, but validate model_info on the target board first because
+  # HBRT/HBM IOVA loadability has been state/layout sensitive. The iterative
+  # best-pair tournament in predict_score.py stays on CPU/GPU.

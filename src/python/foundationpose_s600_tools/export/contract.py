@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Iterable
 
 
+DEFAULT_SCORE_PAIRS = (20, 32)
+
+
 @dataclass(frozen=True)
 class TensorSpec:
     """One named tensor on a partition boundary.
@@ -230,7 +233,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--image-size", type=int, default=160, help="crop H=W (upstream input_resize, default 160)")
     parser.add_argument("--c-in", type=int, default=6, help="network input channels: 6=rgb+xyz (shipped), 4=legacy rgb+depth")
     parser.add_argument("--rot-dim", type=int, default=3, choices=[3, 6], help="rot_rep width: 3=axis_angle (default), 6=6d")
-    parser.add_argument("--score-pairs", type=int, action="append", help="L value(s) for score_net partitions (repeatable; default 16 and 64)")
+    parser.add_argument("--score-pairs", type=int, action="append", help="L value(s) for score_net partitions (repeatable; default: 20 historical real-tensor gate target and 32 strict board target)")
     parser.add_argument("--print-plan", action="store_true", help="print the ONNX/HBM export plan with concrete shapes")
     return parser
 
@@ -253,7 +256,7 @@ def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    score_pairs = args.score_pairs or [16, 64]
+    score_pairs = args.score_pairs or list(DEFAULT_SCORE_PAIRS)
     base_dims = export_dims(args)
     all_parts = build_partitions(base_dims, score_pairs)
 

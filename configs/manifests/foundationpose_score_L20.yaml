@@ -1,0 +1,56 @@
+# FoundationPose ScoreNetMultiPair (L=20) — S600 BPU manifest
+#
+# Historical real-tensor ScoreNet gate target for the S600 board/runtime
+# (UCP 3.13.6 / HBRT 4.7.5). Normal HBRT model_info currently fails this HBM
+# with the same cross-core IOVA parser error seen on the full Refine HBM, but the
+# one-core preload shim makes the single-core deployment path loadable again.
+#
+# Tensor names/shapes/dtypes must match
+# build/foundationpose_export/contracts/score_net_L20.json and the compiled HBM.
+
+model:
+  name: score_net_L20
+  hbm: models/hbm_real_int16/foundationpose_score_net_L20_real_int16_no_output.hbm
+  upstream_callable: ScoreNetMultiPair.forward
+
+inputs:
+  - name: A           # rendered crops: rgb(3) + xyz_map(3), one per pose pair
+    dtype: float32
+    shape: [20, 6, 160, 160]
+    layout: NCHW
+  - name: B           # observed crops
+    dtype: float32
+    shape: [20, 6, 160, 160]
+    layout: NCHW
+
+outputs:
+  - name: score_logit  # per-pair score; argmax/tournament selection on host
+    dtype: float32
+    shape: [1, 20]
+
+runtime:
+  core_id: [1]
+  pairs_per_group: 20
+  output_dtype: float32
+  precision: all_node_int16
+  calibration: real_driller
+  preload:
+    library: build/cmake/src/csrc/libfoundationpose_bpu_core1_preload.so
+    reason: "HBRT 4.7.5 checks IOVA equality across every reported BPU core before --core_id scheduling; this shim reports one visible core for single-core deployment."
+  # ScoreNetMultiPair has cross-candidate attention inside the fixed L group.
+  # Semantic validation requires exactly 20 candidates for this HBM. Padding or
+  # splitting larger groups changes the attention scope and is load/control-flow
+  # smoke only unless validated against final pose impact.
+
+validation:
+  real_gate: pass
+  normal_model_info: "IOVA_FAIL 0/8 without preload"
+  preload_model_info: "OK 8/8 with libfoundationpose_bpu_core1_preload.so"
+  backend: persistent
+  samples: 9
+  top1: "8/9"
+  top5_mean: 4.556
+  top10_mean: 9.444
+  spearman_mean: 0.986466
+  rho_mean: 0.992366
+  max_abs_max: 1.47508

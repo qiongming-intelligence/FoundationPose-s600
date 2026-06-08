@@ -150,7 +150,7 @@ def validate_one(root: Path, partition: str, contract: dict[str, Any], refs: lis
 def main() -> int:
     parser = argparse.ArgumentParser(description="Validate S600 HBM outputs against existing ONNX reference bins.")
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument("--partition", required=True, choices=["refine_net", "score_net_L16", "score_net_L64"])
+    parser.add_argument("--partition", required=True, help="partition name, e.g. refine_net or score_net_L20")
     parser.add_argument("--hbm", type=Path, action="append", required=True)
     parser.add_argument("--core-id", default="1")
     parser.add_argument("--input-root", type=Path, default=Path("build/foundationpose_export/accuracy_inputs"))

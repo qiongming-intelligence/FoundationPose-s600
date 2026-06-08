@@ -17,6 +17,9 @@
 #   HB_COMPILE_MARCH            default nash-p
 #   HB_COMPILE_CALIBRATION_TYPE skip|max|...   (default skip; skip uses random/fixed calibration in hb_compile 3.5.3 and is NOT deployable for ScoreNet)
 #   HB_COMPILE_CALIB_DATA_ROOT  root containing <partition>/<input_name>/*.npy|*.bin calibration tensors when calibration_type != skip
+#   HB_COMPILE_OPTIMIZATION     calibration_parameters.optimization value; e.g.
+#                               "set_all_nodes_int16;set_model_output_int16" for the
+#                               highest-precision deployable BPU path (default empty = int8 PTQ)
 set -euo pipefail
 
 usage() {
@@ -53,6 +56,11 @@ core_num="${HB_COMPILE_CORE_NUM:-2}"
 compile_mode="${HB_COMPILE_MODE:-latency}"
 calibration_type="${HB_COMPILE_CALIBRATION_TYPE:-skip}"
 calib_data_root="${HB_COMPILE_CALIB_DATA_ROOT:-}"
+# Optional hb_compile node-precision optimization (a calibration_parameters key).
+# Highest-precision deployable BPU path on hb_compile 3.5.3 is all-node int16:
+#   HB_COMPILE_OPTIMIZATION="set_all_nodes_int16;set_model_output_int16"
+# Leave empty for the default (int8 PTQ from the calibration set).
+optimization="${HB_COMPILE_OPTIMIZATION:-}"
 
 if [[ "$calibration_type" == "skip" ]]; then
   cat >&2 <<'EOF'
@@ -145,6 +153,9 @@ PY
     calib_data_type="$(IFS=';'; echo "${calib_types[*]}")"
     calibration_yaml+=$'\n'"  cal_data_dir: \"$calib_data_dir\""
     calibration_yaml+=$'\n'"  cal_data_type: \"$calib_data_type\""
+  fi
+  if [[ -n "$optimization" ]]; then
+    calibration_yaml+=$'\n'"  optimization: \"$optimization\""
   fi
 
   cat >"$config_path" <<EOF

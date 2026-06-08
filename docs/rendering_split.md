@@ -40,11 +40,18 @@ Host still performs the decode and SE(3) composition.
 
 ### ScoreNetMultiPair
 
-Input `A,B`: candidate crop pairs, fixed `L` baked into the graph. For
-`score_net_L16`, `A,B=(16,6,160,160)` and output `score_logit=(1,16)`.
+Input `A,B`: candidate crop pairs, fixed `L` baked into the graph. The default
+contract/export defaults include the historical `score_net_L20`, with
+`A,B=(20,6,160,160)` and output `score_logit=(1,20)`, plus the current strict
+L32 board target. Deployability must be validated per board/runtime. On the
+current local S600/HBRT state, L20 needs the one-core preload shim to bypass
+HBRT 4.7.5's pre-scheduling cross-core IOVA check, while `score_net_L32` loads
+both normally and with the same preload policy.
 
 Host still performs the iterative best-pair tournament / argmax and all candidate
-bookkeeping.
+bookkeeping. Because ScoreNet attends across the fixed `L` group, semantic BPU
+validation requires exactly that many candidates; padding a shorter set is
+load/control-flow smoke only.
 
 ## Hybrid dataflow
 

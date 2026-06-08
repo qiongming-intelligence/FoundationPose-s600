@@ -19,14 +19,14 @@ The captured layout is directly accepted by ``prepare_calibration.py``:
 
     <out_root>/refine_net/A/000000.npy
     <out_root>/refine_net/B/000000.npy
-    <out_root>/score_net_L64/A/000000.npy
-    <out_root>/score_net_L64/B/000000.npy
+    <out_root>/score_net_L20/A/000000.npy
+    <out_root>/score_net_L20/B/000000.npy
 
 Environment knobs for ad-hoc runs:
 
     FOUNDATIONPOSE_S600_CAPTURE_DIR      output root
     FOUNDATIONPOSE_S600_CAPTURE_LIMIT    max files per partition (default 1024)
-    FOUNDATIONPOSE_S600_CAPTURE_SCORE_L  comma-separated ScoreNet L values to stage (default 16,64)
+    FOUNDATIONPOSE_S600_CAPTURE_SCORE_L  comma-separated ScoreNet L values to stage (default 20; use 16 as fallback / 24+ only for diagnostics)
     FOUNDATIONPOSE_S600_CAPTURE_CHUNK_SCORE=0 disables chunking larger score groups
 """
 
@@ -44,7 +44,7 @@ from typing import Any, Callable
 class CaptureConfig:
     out_root: Path
     limit: int = 1024
-    score_lengths: tuple[int, ...] = (16, 64)
+    score_lengths: tuple[int, ...] = (20,)
     chunk_score: bool = True
     save_format: str = "npy"
     counters: dict[str, int] = field(default_factory=dict)
@@ -52,7 +52,7 @@ class CaptureConfig:
     @classmethod
     def from_env(cls, out_root: str | os.PathLike[str] | None = None, limit: int | None = None) -> "CaptureConfig":
         root = out_root or os.environ.get("FOUNDATIONPOSE_S600_CAPTURE_DIR") or "configs/calibration/data/raw_capture"
-        raw_l = os.environ.get("FOUNDATIONPOSE_S600_CAPTURE_SCORE_L", "16,64")
+        raw_l = os.environ.get("FOUNDATIONPOSE_S600_CAPTURE_SCORE_L", "20")
         score_lengths = tuple(int(x) for x in raw_l.split(",") if x.strip())
         chunk_score = os.environ.get("FOUNDATIONPOSE_S600_CAPTURE_CHUNK_SCORE", "1") != "0"
         env_limit = os.environ.get("FOUNDATIONPOSE_S600_CAPTURE_LIMIT")

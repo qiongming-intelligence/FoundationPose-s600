@@ -17,8 +17,9 @@ Expected default shapes:
 
 ```text
 refine_net:     A,B [1,6,160,160] -> trans [1,3], rot [1,3]
-score_net_L16:  A,B [16,6,160,160] -> score_logit [1,16]
-score_net_L64:  A,B [64,6,160,160] -> score_logit [1,64]
+score_net_L20:  A,B [20,6,160,160] -> score_logit [1,20]  # historical real-tensor gate target
+score_net_L16:  A,B [16,6,160,160] -> score_logit [1,16]  # small fixed-L fallback, revalidate model_info
+score_net_L32:  A,B [32,6,160,160] -> score_logit [1,32]  # latest strict board Score BPU target
 ```
 
 If your checkpoint config differs (`c_in`, `input_resize`, `rot_rep`), regenerate
@@ -31,7 +32,7 @@ Run on the x86 export host:
 ```bash
 PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.refine --verify
 PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.score \
-  --contract build/foundationpose_export/contracts/score_net_L16.json --verify
+  --contract build/foundationpose_export/contracts/score_net_L20.json --verify
 ```
 
 Checks:
@@ -70,47 +71,69 @@ impact. For S600 hb_compile 3.5.3, `calibration_type: skip` is **not** a true
 FP32 pass-through in practice: it may run fixed/random calibration when no
 calibration data is provided. Treat skip-calibrated HBM as ABI/perf smoke only.
 
-Current S600 smoke results to keep in mind:
+Current real-calibrated S600 results to keep in mind:
 
 - Precision policy: do not quantize just for the sake of quantization. On S600,
   `hb_compile` has no true all-FP32 BPU path, so a BPU HBM is necessarily a
-  reduced-precision deployment artifact. True FP32 can be preserved only by
-  forcing nodes to the CPU with `node_info`; that is valid as an accuracy golden
-  or as an intentional hybrid fallback for small, sensitive layers.
-- CPU-float HBM is an accuracy golden only, not a deployable target. RefineNet
-  CPU-float matched ONNX to `trans max_abs≈2.8e-8`, `rot max_abs≈3.1e-7`, but
-  ran at about 17.2 s/infer.
-- RefineNet deployable baseline is currently
-  `models/hbm_refine_formula64/foundationpose_refine_net_formula64_int16_no_output_core1.hbm`:
-  full BPU (`NODE_INFO={}`, `CORE_NUM=1`) with no CPU fallback,
-  `calibration_type=max`, 64 formula calibration samples, and
-  `optimization=set_all_nodes_int16` **without** `set_model_output_int16`.
-  Against the board-side CPU-float HBM golden over 8 formula samples:
-  `trans L2_mean≈0.0056` (`max_abs_max≈0.0134`) and `rot L2_mean≈0.0098`
-  (`max_abs_max≈0.0137`). Profiler latency is ≈1.95 ms single-core /
-  ≈1.96 ms dual-core (BPU≈1.92–1.93 ms, CPU=0 ms). The older
-  `foundationpose_refine_net_opt_int16_core1.hbm` used single-sample calibration
-  plus `set_model_output_int16` and clipped `trans` outputs, so it is no longer
-  the deployable RefineNet candidate.
-- ScoreNet skip/random-calibrated L16/L64 collapsed logits to a constant, so
-  top-1/rank gates failed even though ABI and performance looked good.
-- ScoreNet full-BPU int16 core1 runs, but is not precision-aligned on current
-  formula-smoke ranking gates: L16 top-5=3/5, Spearman≈0.61; L64 top-1 failed,
-  top-5=2/5, Spearman≈0.32. Mean-centering the output fixed output scale but
-  not internal attention/head quantization error.
-- Small CPU-fallback ScoreNet sweeps (7/11/12/15/18/34 CPU nodes) either missed
-  top-1 or top-5 and were not better than the stable candidate.
-- The current ScoreNet deployable candidate is
-  `models/hbm_core1_sweep/foundationpose_score_net_L16_cpu_cross_head_core1.hbm`
-  / `foundationpose_score_net_L64_cpu_cross_head_core1.hbm`: encoder/self-attn
-  stays on BPU, cross-attention/head stays float on CPU. Formula-smoke metrics:
-  L16 top-1/top-5/top-10 all match, Spearman≈0.994; profiler latency is
-  ≈44.25 ms dual-core (BPU≈20.65 ms, CPU≈23.49 ms). L64 top-1/top-10 match,
-  top-5=4/5, Spearman≈0.986; profiler latency is ≈178.15 ms single-core
-  (BPU≈83.49 ms, CPU≈94.39 ms).
+  reduced-precision deployment artifact. The highest-precision deployable path is
+  `calibration_type=max` with real captured tensors and
+  `optimization=set_all_nodes_int16` (preserve FLOAT32 outputs by not adding
+  `set_model_output_int16`).
+- HBRT 4.7.5 loader caveat: some valid single-core HBMs fail normal
+  `model_info` before `--core_id` scheduling because HBRT checks IOVA equality
+  across every reported BPU core. The local preload shim
+  `build/cmake/src/csrc/libfoundationpose_bpu_core1_preload.so` overrides only
+  `hb_bpu_core_num()` to report one visible core for single-core deployment. It
+  changes loader visibility, not HBM contents or graph precision.
+- RefineNet default BPU target:
+  `models/hbm_real_int16/foundationpose_refine_net_real_int16_no_output.hbm`.
+  This is the full all-node-int16/FLOAT32-output HBM. Normal `model_info` fails
+  on this HBRT with IOVA errors (`0/8`), but with the one-core preload it passes
+  `model_info OK 8/8`. The 8-sample real-driller tensor gate via persistent HBM
+  compare produced `trans max_abs_max=0.0158056` and
+  `rot max_abs_max=0.0317621`. `hrt_model_exec perf --frame_count 10` with
+  preload measured `1.950 ms` average latency (`509.061 FPS`). Strict full
+  `Refine BPU + Score BPU L32` E2E completed through the persistent runner at 32
+  hypotheses with final pose delta vs CPU-only `0.000803929 m / 0.496348°`,
+  matrix max-abs `0.00618881`.
+- Refine split all-BPU probes:
+  `models/hbm_refine_split_20260608/refine_encodeA.hbm`,
+  `refine_encodeAB_pos.hbm`, `refine_trans_head.hbm`, and `refine_rot_head.hbm`
+  fail normal `model_info` without preload and pass `OK 8/8` with preload.
+  Direct external chaining must preserve padded/aligned intermediate tensors;
+  stripping padding caused large numerical errors. The full Refine HBM is the
+  preferred runtime target because it avoids this padded handoff complexity.
+- RefineNet fallback/control artifacts:
+  `models/hbm_refine_recovery_micro_bpu/refine_bpu_encodeab_conv_only_real_int16.hbm`
+  remains loadable and accurate as a control (`trans max_abs_max=0.00174491`,
+  `rot max_abs_max=0.00425202`), but it is not the requested all-BPU path because
+  node inspection reports CPU fallback for most RefineNet nodes. The progressive
+  `encodeA2` recompile remains superseded by the full all-node HBM plus preload.
+- ScoreNet historical real-tensor gate target:
+  `models/hbm_real_int16/foundationpose_score_net_L20_real_int16_no_output.hbm`.
+  Normal `model_info` currently fails with the same IOVA error (`0/8`), but with
+  the one-core preload it passes `OK 8/8`. The 9-group real-driller ranking gate
+  with preload produced `top1=8/9`, `top5_mean=4.556`, `top10_mean=9.444`,
+  `spearman_mean=0.986466`, `rho_mean=0.992366`, `max_abs_max=1.47508`; profiler
+  latency from the compile report is ≈24.73 ms.
+- ScoreNet latest strict-32 board precision target:
+  `models/hbm_real_int16/foundationpose_score_net_L32_real_int16_no_output.hbm`.
+  Normal and preload `model_info` both passed 8/8 attempts. L32 ONNX export/verify
+  on ws-wan matched eager PyTorch with `score_logit max|Δ|=7.629e-06`. A
+  six-sample strict-32 real-driller tensor gate via persistent HBM compare
+  produced `top1=6/6`, `top5_mean=5.000`, `top10_mean=9.333`,
+  `spearman_mean=0.978861`, `rho_mean=0.992902`, `max_abs_max=1.70461`. Strict
+  32-hypothesis `Refine CPU + Score BPU L32` matched CPU-only exactly on the
+  driller smoke frame (translation delta 0 m, rotation delta 0°, matrix max-abs
+  delta 0). Padded shorter-L runs remain load/control-flow smoke only, not a
+  ScoreNet correctness gate.
+- ScoreNet HBM loadability is board/HBRT-state sensitive and not monotonic in L.
+  Revalidate the exact HBM on the exact board with the same preload policy that
+  deployment will use.
 
-Real captured `cal_data_dir` tensors are still mandatory for final deployment
-sign-off, because formula tensors do not prove FoundationPose pose accuracy.
+The all-BPU Refine path is recovered for the current board/HBRT state via the
+one-core preload shim. Before final sign-off, broaden from the single-frame smoke
+to multi-frame pose drift and FoundationPose-level ADD/ADD-S gates.
 
 ## Milestone 5 — FoundationPose-level accuracy gate
 

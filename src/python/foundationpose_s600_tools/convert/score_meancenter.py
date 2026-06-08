@@ -23,8 +23,8 @@ unchanged.
 
 Usage:
     python -m foundationpose_s600_tools.convert.score_meancenter \
-        build/foundationpose_export/onnx/foundationpose_score_net_L16.onnx \
-        build/foundationpose_export/onnx/foundationpose_score_net_L16_mc.onnx
+        build/foundationpose_export/onnx/foundationpose_score_net_L20.onnx \
+        build/foundationpose_export/onnx/foundationpose_score_net_L20_mc.onnx
 """
 
 from __future__ import annotations

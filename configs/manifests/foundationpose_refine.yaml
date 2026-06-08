@@ -7,7 +7,7 @@
 
 model:
   name: refine_net
-  hbm: models/hbm/foundationpose_refine_net.hbm
+  hbm: models/hbm_real_int16/foundationpose_refine_net_real_int16_no_output.hbm
   upstream_callable: RefineNet.forward
 
 inputs:
@@ -29,6 +29,71 @@ outputs:
     shape: [1, 3]
 
 runtime:
-  core_id: [1, 2]     # both S600 BPU cores
-  # N (batch of candidates) is fixed at compile time; re-export + recompile to
-  # change it. Pose-delta decode and SE(3) composition stay on CPU/GPU.
+  core_id: [1]        # single visible/selected S600 BPU core
+  precision: all_node_int16
+  output_dtype: float32
+  calibration: real_driller
+  preload:
+    library: build/cmake/src/csrc/libfoundationpose_bpu_core1_preload.so
+    reason: "HBRT 4.7.5 checks IOVA equality across every reported BPU core before --core_id scheduling; this shim reports one visible core for single-core deployment."
+  # N (batch of candidates) is fixed at compile time; RefineNet runs per sample.
+  # Pose-delta decode and SE(3) composition stay on host.
+
+validation:
+  precision_candidate: "full all-node-int16 RefineNet with FLOAT32 outputs, single-core preload"
+  full_all_node_int16:
+    hbm: models/hbm_real_int16/foundationpose_refine_net_real_int16_no_output.hbm
+    normal_model_info: "IOVA_FAIL 0/8 on HBRT 4.7.5 without preload"
+    preload_model_info: "OK 8/8 with libfoundationpose_bpu_core1_preload.so"
+    placement_evidence: "hb_model_info node_info={} and hbrt4-disas BPU graph segment; no CPU fallback reported for the HBM."
+    real_tensor_compare_samples: 8
+    trans_max_abs_max: 0.0158056
+    rot_max_abs_max: 0.0317621
+    hrt_perf_frame_count: 10
+    hrt_latency_avg_ms: 1.950
+    hrt_fps: 509.061
+    full_e2e_with_score_L32_vs_cpu32:
+      command: "LD_PRELOAD=<core1 preload> run_s600_board_hybrid_demo.py --bpu-mode full --bpu-runtime persistent --max-hypotheses 32 --score-bpu-mode strict"
+      translation_m: 0.000803929445721
+      rotation_deg: 0.496347800285
+      matrix_max_abs: 0.00618880987167
+  split_all_bpu_probe:
+    hbms:
+      - models/hbm_refine_split_20260608/refine_encodeA.hbm
+      - models/hbm_refine_split_20260608/refine_encodeAB_pos.hbm
+      - models/hbm_refine_split_20260608/refine_trans_head.hbm
+      - models/hbm_refine_split_20260608/refine_rot_head.hbm
+    normal_model_info: "IOVA_FAIL 0/8 for each split HBM without preload"
+    preload_model_info: "OK 8/8 for each split HBM with libfoundationpose_bpu_core1_preload.so"
+    note: "Direct split chaining must preserve padded intermediate tensor strides; hrt_model_exec chain with padded handoff matched full-HBM sample_000000 at trans max_abs=0.00335349 and rot max_abs=0.0117319. The full all-node HBM is preferred for runtime simplicity."
+  micro_bpu_fallback:
+    hbm: models/hbm_refine_recovery_micro_bpu/refine_bpu_encodeab_conv_only_real_int16.hbm
+    status: "loadable fallback only; not the full-BPU path because node_info reports CPU fallback for most RefineNet nodes."
+    model_info_retries: "8/8"
+    real_tensor_compare_samples: 8
+    trans_max_abs_max: 0.00174491
+    rot_max_abs_max: 0.00425202
+  latest_progressive_recompile:
+    loadable_candidate:
+      hbm: models/hbm_refine_recovery_progressive_bpu/refine_bpu_encodeA2_real_int16.hbm
+      model_info_retries: "8/8"
+      real_tensor_compare_samples: 8
+      trans_max_abs_max: 0.00767354
+      rot_max_abs_max: 0.0294408
+      full_e2e_with_score_L32_vs_cpu32:
+        translation_m: 0.00103625347945
+        rotation_deg: 0.421672557329
+        matrix_max_abs: 0.00552761554718
+      promoted: false
+      note: "Superseded by the full all-node-int16 HBM with the one-core preload shim."
+    iova_failing_candidates:
+      - hbm: models/hbm_refine_recovery_progressive_bpu/refine_bpu_encodeAB2_real_int16.hbm
+        latest_loadability: "IOVA_FAIL 0/4 without preload"
+        hb_compile_quantized_cosine: {trans: 0.999998, rot: 0.999909}
+      - hbm: models/hbm_refine_recovery_progressive_bpu/refine_bpu_encodeAB4_real_int16.hbm
+        latest_loadability: "IOVA_FAIL 0/4 without preload"
+        hb_compile_quantized_cosine: {trans: 0.999948, rot: 0.999287}
+      - hbm: models/hbm_refine_recovery_progressive_bpu/refine_bpu_encoder_convish_real_int16.hbm
+        latest_loadability: "IOVA_FAIL 0/4 without preload"
+        hb_compile_quantized_cosine: {trans: 0.999707, rot: 0.999558}
+  note: "Use LD_PRELOAD for board runs on HBRT 4.7.5; it changes the loader's visible core count, not RefineNet precision or HBM contents."

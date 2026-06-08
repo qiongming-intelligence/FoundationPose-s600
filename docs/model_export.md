@@ -19,7 +19,8 @@ PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.contract \
 
 Flags: `--image-size` (crop H=W, default 160), `--c-in` (6 = rgb+xyz shipped,
 4 = legacy rgb+depth), `--rot-dim` (3 axis_angle / 6 6d), `--score-pairs`
-(repeatable L values, default 16 and 64), `--partition` (subset).
+(repeatable L values; default emits L20 historical real-tensor gate target and L32
+strict board target), `--partition` (subset).
 
 ### Verified upstream signatures (pinned SHA, see docs/upstream_pin.md)
 
@@ -45,7 +46,7 @@ PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.refine \
   --contract build/foundationpose_export/contracts/refine_net.json --verify
 
 PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.score \
-  --contract build/foundationpose_export/contracts/score_net_L16.json --verify
+  --contract build/foundationpose_export/contracts/score_net_L20.json --verify
 ```
 
 If the official `model_best.pth` files are temporarily unavailable, you can smoke-test

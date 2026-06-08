@@ -9,8 +9,10 @@ pipeline: foundationpose_tracking_hybrid
 bpu_models:
   - manifest: configs/manifests/foundationpose_refine.yaml
     role: pose_refinement      # RefineNet, iterated (default 5) per frame
-  - manifest: configs/manifests/foundationpose_score_L16.yaml
-    role: candidate_scoring    # ScoreNetMultiPair, registration / re-detect
+  - manifest: configs/manifests/foundationpose_score_L20.yaml
+    role: candidate_scoring    # Historical L20 gate target; revalidate L16/L20/L32 loadability on the target board
+  - manifest: configs/manifests/foundationpose_score_L32.yaml
+    role: candidate_scoring_strict32 # Latest strict 32-hypothesis Score BPU target; not a second runtime stage
 
 host_stages:                   # CPU/GPU/Python — NOT compiled to HBM
   - mesh_setup                 # load/center mesh, diameter, symmetry, rotation grid
@@ -28,3 +30,7 @@ dataflow:
   notes:
     - "A = rendered crop (hypothesis), B = observed crop; both 6ch rgb+xyz."
     - "BPU returns raw deltas/logits; all geometry decode is on host."
+    - "ScoreNet loadability is board/HBRT-state sensitive; L32 loads normally on the latest local board state, while L20 needs the one-core preload shim to bypass HBRT 4.7.5's pre-scheduling cross-core IOVA check. Revalidate the chosen fixed-L HBM before deployment."
+    - "ScoreNet semantic validation requires candidate count to match the fixed-L HBM; padding shorter sets is load/control-flow smoke only because padded candidates participate in ScoreNet attention. Latest L32 real-driller strict gate is top1=6/6 with high rank correlation."
+    - "Use the persistent C++/UCP runner for Refine/full BPU validation so selected HBMs load once per process. The default Refine BPU target is now the full all-node-int16/FLOAT32-output HBM with the one-core preload shim; the older micro-BPU recovery HBM remains fallback/control only because most Refine nodes fall back to CPU."
+    - "Full Refine BPU + Score BPU L32 strict smoke completed with final pose delta vs CPU-only 0.000803929 m / 0.496348°, matrix max-abs 0.00618881."

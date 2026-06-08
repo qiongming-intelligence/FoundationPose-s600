@@ -144,7 +144,7 @@ def rank_metrics(ref: np.ndarray, got: np.ndarray) -> dict[str, Any]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", type=Path, default=Path.cwd())
-    ap.add_argument("--partition", required=True, choices=["refine_net", "score_net_L16", "score_net_L64"])
+    ap.add_argument("--partition", required=True, help="partition name, e.g. refine_net or score_net_L20")
     ap.add_argument("--hbm", type=Path, required=True)
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--core-id", default="1")

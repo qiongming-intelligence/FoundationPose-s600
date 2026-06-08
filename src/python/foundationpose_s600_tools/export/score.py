@@ -8,7 +8,7 @@ graph has no dynamic control flow.
 
 Example:
     PYTHONPATH=src/python python -m foundationpose_s600_tools.export.score \\
-        --contract build/foundationpose_export/contracts/score_net_L16.json \\
+        --contract build/foundationpose_export/contracts/score_net_L20.json \\
         --verify
 """
 
@@ -45,7 +45,7 @@ def build_score_module(torch, root: Path, run_name: str, contract: dict, allow_r
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Export FoundationPose ScoreNetMultiPair to ONNX.")
-    parser.add_argument("--contract", type=Path, default=Path("build/foundationpose_export/contracts/score_net_L16.json"))
+    parser.add_argument("--contract", type=Path, default=Path("build/foundationpose_export/contracts/score_net_L20.json"))
     parser.add_argument("--upstream-root", type=str, default=None)
     parser.add_argument("--run-name", default=SCORE_RUN_NAME)
     parser.add_argument("--opset", type=int, default=17)

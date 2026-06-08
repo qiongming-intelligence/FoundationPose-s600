@@ -1,0 +1,79 @@
+# FoundationPose ScoreNetMultiPair (L=32) — S600 BPU manifest
+#
+# Current strict-32 Score BPU target. It loads normally on this board and also
+# loads with the one-core preload shim used for full Refine recovery. L20 is again
+# available with that preload, but L32 remains the latest strict 32-hypothesis E2E
+# board target.
+#
+# Revalidate with hrt_model_exec model_info on the exact target board before
+# treating this as deployable; HBRT/HBM IOVA loadability is board-state/layout
+# sensitive.
+
+model:
+  name: score_net_L32
+  hbm: models/hbm_real_int16/foundationpose_score_net_L32_real_int16_no_output.hbm
+  upstream_callable: ScoreNetMultiPair.forward
+
+inputs:
+  - name: A           # rendered crops: rgb(3) + xyz_map(3), one per pose pair
+    dtype: float32
+    shape: [32, 6, 160, 160]
+    layout: NCHW
+  - name: B           # observed crops
+    dtype: float32
+    shape: [32, 6, 160, 160]
+    layout: NCHW
+
+outputs:
+  - name: score_logit  # per-pair score; argmax/tournament selection on host
+    dtype: float32
+    shape: [1, 32]
+
+runtime:
+  core_id: [1]
+  pairs_per_group: 32
+  output_dtype: float32
+  precision: all_node_int16
+  calibration: real_driller
+  exact_L_required_for_semantic_validation: true
+  smoke_pad_tail: repeat_last
+  smoke_pad_note: "Padding shorter candidate sets is for board/HBM smoke only and is not semantically equivalent to ScoreNetMultiPair.forward(A, B, L=len(A))."
+
+validation:
+  latest_board_smoke: pass
+  model_info_retries: "8/8"
+  onnx_export_verify:
+    env: sam3-hbm
+    host: ws-wan
+    score_logit_max_abs_vs_torch: 0.000007629
+  real_driller_strict32_tensor_gate:
+    samples: 6
+    backend: persistent
+    source: "ws-wan generated score_net_L32 real eval pack"
+    normal_model_info: "OK 8/8"
+    preload_model_info: "OK 8/8 with libfoundationpose_bpu_core1_preload.so"
+    top1: "6/6"
+    top5_mean: 5.0
+    top10_mean: 9.333
+    spearman_mean: 0.978861
+    rho_mean: 0.992902
+    max_abs_max: 1.70461
+  captured_strict32_tensor_smoke:
+    samples: 1
+    backend: persistent
+    source: "local board tensor dump from strict 32-hypothesis demo"
+    top1: "1/1"
+    top5_mean: 5.0
+    top10_mean: 9.0
+    spearman_mean: 0.986070
+    rho_mean: 0.994861
+    max_abs_max: 0.0732155
+  strict_e2e_path: "Refine CPU + Score BPU L32, 32 hypotheses, --score-bpu-mode strict"
+  strict_final_pose_vs_cpu_only:
+    translation_m: 0.0
+    rotation_deg: 0.0
+    matrix_max_abs: 0.0
+  smoke_pad_e2e_path: "Refine CPU + Score BPU L32, 20 hypotheses, --score-bpu-mode smoke-pad"
+  smoke_pad_final_pose_vs_cpu_only:
+    translation_m: 0.0
+    rotation_deg: 0.0146

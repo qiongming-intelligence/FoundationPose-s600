@@ -56,7 +56,7 @@ Useful environment knobs:
 ```bash
 export FOUNDATIONPOSE_S600_CAPTURE_DIR=configs/calibration/data/raw_capture
 export FOUNDATIONPOSE_S600_CAPTURE_LIMIT=2000
-export FOUNDATIONPOSE_S600_CAPTURE_SCORE_L=16,64
+export FOUNDATIONPOSE_S600_CAPTURE_SCORE_L=20   # historical real-tensor gate target; capture L32 too for the strict board target
 ```
 
 The hook dumps `.npy` float32 tensors and never raises into the pose pipeline if a
@@ -69,7 +69,10 @@ configs/calibration/data/
   refine_net/
     A/000000.npy ... (N, 6, 160, 160) float32, one file per batch or per-sample
     B/000000.npy ...
-  score_net_L16/
+  score_net_L20/
+    A/000000.npy ... (20, 6, 160, 160)
+    B/000000.npy ...
+  score_net_L16/          # optional fallback
     A/000000.npy ... (16, 6, 160, 160)
     B/000000.npy ...
 ```
@@ -100,7 +103,7 @@ PYTHONPATH=src/python python3 -m foundationpose_s600_tools.debug.prepare_calibra
 ```
 
 The helper writes one directory per partition input, e.g.
-`configs/calibration/data/hb_compile_real/score_net_L16/A/*.npy`, and a
+`configs/calibration/data/hb_compile_real/score_net_L20/A/*.npy`, and a
 `manifest.json` containing the exact semicolon-separated `cal_data_dir` strings.
 
 Compile calibrated candidates on the x86 toolchain host with:

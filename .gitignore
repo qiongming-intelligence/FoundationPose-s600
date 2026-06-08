@@ -45,6 +45,7 @@ __pycache__/
 *.pyc
 .venv/
 .env
+.deps/
 *.egg-info/
 
 # Editors
