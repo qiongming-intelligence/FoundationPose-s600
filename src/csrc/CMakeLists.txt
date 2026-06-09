@@ -41,6 +41,20 @@ if(FOUNDATIONPOSE_S600_BUILD_APPS)
     if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
         target_compile_options(foundationpose_bpu_runner PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
     endif()
+
+    add_library(foundationpose_placeholder_renderer SHARED tools/placeholder_renderer.cpp)
+    set_target_properties(foundationpose_placeholder_renderer PROPERTIES
+        OUTPUT_NAME foundationpose_placeholder_renderer
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_features(foundationpose_placeholder_renderer PRIVATE cxx_std_17)
+    find_package(OpenMP QUIET)
+    if(OpenMP_CXX_FOUND)
+        target_link_libraries(foundationpose_placeholder_renderer PRIVATE OpenMP::OpenMP_CXX)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+        target_compile_options(foundationpose_placeholder_renderer PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow -O3)
+    endif()
 endif()
 
 if(FOUNDATIONPOSE_S600_ENABLE_HOBOT)

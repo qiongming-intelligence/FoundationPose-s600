@@ -66,13 +66,14 @@ class PartitionSpec:
 #   R  : rotation representation width (axis_angle=3, 6d=6)
 #   B  : score groups (outer batch); for the exported fixed-L graph B=1
 #   L  : pose pairs scored together per group
-def _refine_partition(rot_dim: int) -> PartitionSpec:
+def _refine_partition(rot_dim: int, batch: int = 1) -> PartitionSpec:
+    suffix = "" if int(batch) == 1 else f"_N{int(batch)}"
     return PartitionSpec(
-        name="refine_net",
+        name=f"refine_net{suffix}",
         upstream_module="learning.models.refine_network",
         upstream_callable="RefineNet.forward",
-        onnx_name="foundationpose_refine_net.onnx",
-        hbm_name="foundationpose_refine_net.hbm",
+        onnx_name=f"foundationpose_refine_net{suffix}.onnx",
+        hbm_name=f"foundationpose_refine_net{suffix}.hbm",
         inputs=[
             TensorSpec("A", "float32", ["N", "Cin", "H", "W"], "rendered_crop(rgb+xyz)"),
             TensorSpec("B", "float32", ["N", "Cin", "H", "W"], "observed_crop(rgb+xyz)"),
@@ -115,10 +116,13 @@ def _score_partition(pairs_per_group: int) -> PartitionSpec:
     )
 
 
-def build_partitions(dims: dict[str, int], score_pairs: Iterable[int]) -> dict[str, PartitionSpec]:
+def build_partitions(dims: dict[str, int], score_pairs: Iterable[int], refine_batches: Iterable[int] = (1,)) -> dict[str, PartitionSpec]:
     parts: dict[str, PartitionSpec] = {}
-    refine = _refine_partition(dims["R"])
-    parts[refine.name] = refine
+    for batch in refine_batches:
+        if int(batch) <= 0:
+            raise SystemExit(f"refine batch must be positive, got {batch}")
+        refine = _refine_partition(dims["R"], int(batch))
+        parts[refine.name] = refine
     for n in score_pairs:
         spec = _score_partition(n)
         parts[spec.name] = spec
@@ -145,8 +149,10 @@ def tensor_contract(tensor: TensorSpec, dims: dict[str, int]) -> dict[str, objec
 
 
 def partition_dims(base_dims: dict[str, int], spec: PartitionSpec) -> dict[str, int]:
-    """Per-partition dimension map: pins N for score_net so N == Bg*L."""
+    """Per-partition dimension map: pins N for fixed-shape refine/score variants."""
     dims = dict(base_dims)
+    if spec.name.startswith("refine_net_N"):
+        dims["N"] = int(spec.name.rsplit("_N", 1)[1])
     if spec.name.startswith("score_net_L"):
         pairs = int(spec.name.rsplit("L", 1)[1])
         dims["L"] = pairs
@@ -206,7 +212,7 @@ def write_contracts(partitions: list[PartitionSpec], out_dir: Path, base_dims: d
 
 
 def export_entrypoint(partition_name: str) -> str:
-    module = "refine" if partition_name == "refine_net" else "score"
+    module = "refine" if partition_name.startswith("refine_net") else "score"
     return f"python -m foundationpose_s600_tools.export.{module}"
 
 
@@ -229,7 +235,8 @@ def print_export_plan(partitions: list[PartitionSpec], out_dir: Path, base_dims:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate FoundationPose S600 partition export contracts.")
     parser.add_argument("--out-dir", type=Path, default=Path("build/foundationpose_export"), help="export work directory")
-    parser.add_argument("--partition", action="append", help="partition name to include (default: all). 'refine_net' or 'score_net_L<N>'")
+    parser.add_argument("--partition", action="append", help="partition name to include (default: all). 'refine_net', 'refine_net_N<N>', or 'score_net_L<N>'")
+    parser.add_argument("--refine-batch", type=int, action="append", help="N value(s) for refine_net partitions (repeatable; default: 1; e.g. --refine-batch 1 --refine-batch 32 emits refine_net and refine_net_N32)")
     parser.add_argument("--image-size", type=int, default=160, help="crop H=W (upstream input_resize, default 160)")
     parser.add_argument("--c-in", type=int, default=6, help="network input channels: 6=rgb+xyz (shipped), 4=legacy rgb+depth")
     parser.add_argument("--rot-dim", type=int, default=3, choices=[3, 6], help="rot_rep width: 3=axis_angle (default), 6=6d")
@@ -257,8 +264,9 @@ def main() -> int:
     args = parser.parse_args()
 
     score_pairs = args.score_pairs or list(DEFAULT_SCORE_PAIRS)
+    refine_batches = args.refine_batch or [1]
     base_dims = export_dims(args)
-    all_parts = build_partitions(base_dims, score_pairs)
+    all_parts = build_partitions(base_dims, score_pairs, refine_batches)
 
     if args.partition:
         unknown = [p for p in args.partition if p not in all_parts]

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -134,6 +135,19 @@ class PersistentBpuSession:
                 proc.kill()
 
 
+def _scratch_parent() -> Path | None:
+    """Prefer tmpfs scratch for BPU input/output files when available."""
+    override = os.environ.get("FOUNDATIONPOSE_S600_BPU_SCRATCH")
+    if override:
+        path = Path(override)
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    shm = Path("/dev/shm")
+    if shm.is_dir() and os.access(shm, os.W_OK | os.X_OK):
+        return shm
+    return None
+
+
 class PersistentBpuModelRunner:
     """Run one loaded model in a :class:`PersistentBpuSession`."""
 
@@ -151,6 +165,10 @@ class PersistentBpuModelRunner:
         self.input_specs = tuple(input_specs)
         self.output_specs = tuple(output_specs)
         self.keep_tmp = keep_tmp
+        self._io_lock = threading.Lock()
+        self._tmp_root: Path | None = None
+        self._output_dir: Path | None = None
+        atexit.register(self.close)
 
     @classmethod
     def from_contract(
@@ -176,20 +194,34 @@ class PersistentBpuModelRunner:
             )
         return cls(session, key, contract.inputs, contract.outputs, keep_tmp=keep_tmp)
 
+    def _ensure_scratch(self) -> tuple[Path, Path]:
+        if self._tmp_root is None:
+            self._tmp_root = Path(tempfile.mkdtemp(prefix=f"foundationpose_s600_persistent_{self.key}_", dir=_scratch_parent()))
+            self._output_dir = self._tmp_root / "out"
+            self._output_dir.mkdir(parents=True, exist_ok=True)
+        assert self._output_dir is not None
+        return self._tmp_root, self._output_dir
+
+    def close(self) -> None:
+        tmp_root = self._tmp_root
+        self._tmp_root = None
+        self._output_dir = None
+        if tmp_root is not None and not self.keep_tmp:
+            shutil.rmtree(tmp_root, ignore_errors=True)
+
     def infer(self, inputs: Mapping[str, object]) -> dict[str, np.ndarray]:
         missing = [spec.name for spec in self.input_specs if spec.name not in inputs]
         if missing:
             raise KeyError(f"missing HBM inputs: {missing}")
-        tmp_root = Path(tempfile.mkdtemp(prefix="foundationpose_s600_persistent_"))
-        try:
+        with self._io_lock:
+            tmp_root, output_dir = self._ensure_scratch()
+            del tmp_root
             input_files: dict[str, str] = {}
             for spec in self.input_specs:
                 arr = as_float32_nchw(inputs[spec.name], spec.shape)
-                path = tmp_root / f"{spec.name}.bin"
+                path = output_dir.parent / f"{spec.name}.bin"
                 arr.tofile(path)
                 input_files[spec.name] = str(path)
-            output_dir = tmp_root / "out"
-            output_dir.mkdir(parents=True, exist_ok=True)
             response = self.session.request(
                 {
                     "cmd": "infer",
@@ -207,11 +239,8 @@ class PersistentBpuModelRunner:
                 if not isinstance(path_value, str):
                     raise RuntimeError(f"persistent runner missing output {spec.name}: {response}")
                 arr = np.fromfile(path_value, dtype=np.float32)
-                outputs[spec.name] = arr.reshape(spec.shape)
+                outputs[spec.name] = arr.reshape(spec.shape).copy()
             return outputs
-        finally:
-            if not self.keep_tmp:
-                shutil.rmtree(tmp_root, ignore_errors=True)
 
 
 def resolve_hbm(root: Path, hbm: str | Path) -> Path:

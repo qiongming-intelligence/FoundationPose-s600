@@ -18,6 +18,14 @@ class ContractDefaultTests(unittest.TestCase):
         self.assertIn("score_net_L20", parts)
         self.assertIn("score_net_L32", parts)
 
+    def test_refine_batch_partition_uses_distinct_name_and_shape(self) -> None:
+        args = argparse.Namespace(c_in=6, image_size=160, rot_dim=3)
+        parts = build_partitions(export_dims(args), [], refine_batches=[1, 32])
+
+        self.assertIn("refine_net", parts)
+        self.assertIn("refine_net_N32", parts)
+        self.assertEqual(parts["refine_net_N32"].onnx_name, "foundationpose_refine_net_N32.onnx")
+
 
 if __name__ == "__main__":
     unittest.main()

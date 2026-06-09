@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
 from foundationpose_s600_tools.runtime.hrt import TensorSpec
+from foundationpose_s600_tools.runtime.persistent_bpu import PersistentBpuModelRunner
 from foundationpose_s600_tools.runtime.refine_bpu import RefineNetBpu
 from foundationpose_s600_tools.runtime.score_bpu import ScoreNetBpu
 
@@ -32,18 +35,35 @@ class FakeRefineRunner:
             TensorSpec("B", (n, *tail)),
         )
         self.output_specs = (
-            TensorSpec("trans", (1, 3)),
-            TensorSpec("rot", (1, rot_dim)),
+            TensorSpec("trans", (n, 3)),
+            TensorSpec("rot", (n, rot_dim)),
         )
         self.calls: list[dict[str, np.ndarray]] = []
 
     def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
         self.calls.append({key: value.copy() for key, value in inputs.items()})
+        n = self.output_specs[0].shape[0]
         rot_dim = self.output_specs[1].shape[1]
         return {
-            "trans": np.ones((1, 3), dtype=np.float32) * len(self.calls),
-            "rot": np.ones((1, rot_dim), dtype=np.float32) * (10 + len(self.calls)),
+            "trans": np.ones((n, 3), dtype=np.float32) * len(self.calls),
+            "rot": np.ones((n, rot_dim), dtype=np.float32) * (10 + len(self.calls)),
         }
+
+
+class FakePersistentSession:
+    def __init__(self) -> None:
+        self.requests: list[dict[str, object]] = []
+
+    def request(self, payload: dict[str, object], *, timeout: float | None = None) -> dict[str, object]:
+        del timeout
+        self.requests.append(dict(payload))
+        output_dir = Path(str(payload["output_dir"]))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        trans = output_dir / "trans.bin"
+        rot = output_dir / "rot.bin"
+        np.ones((1, 3), dtype=np.float32).tofile(trans)
+        (np.ones((1, 3), dtype=np.float32) * 2).tofile(rot)
+        return {"ok": True, "outputs": {"trans": str(trans), "rot": str(rot)}}
 
 
 class RuntimeAdapterTests(unittest.TestCase):
@@ -133,11 +153,63 @@ class RuntimeAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "tail shape"):
             adapter.predict_numpy(bad, bad)
 
-    def test_refine_rejects_non_unit_compiled_batch(self) -> None:
-        runner = FakeRefineRunner(n=2)
+    def test_refine_batched_contract_chunks_and_clips_padding(self) -> None:
+        runner = FakeRefineRunner(n=2, rot_dim=3)
+        adapter = RefineNetBpu(runner=runner)
+        a = np.zeros((3, 2, 3, 3), dtype=np.float32)
 
-        with self.assertRaisesRegex(ValueError, "expects an N=1 compiled contract"):
-            RefineNetBpu(runner=runner)
+        out = adapter.predict_numpy(a, a)
+
+        self.assertEqual(out["trans"].shape, (3, 3))
+        self.assertEqual(out["rot"].shape, (3, 3))
+        self.assertEqual(len(runner.calls), 2)
+        self.assertEqual(runner.calls[0]["A"].shape, (2, 2, 3, 3))
+        self.assertEqual(runner.calls[1]["A"].shape, (2, 2, 3, 3))
+        self.assertTrue(np.allclose(runner.calls[1]["A"][1], 0))
+        self.assertTrue(np.allclose(out["trans"][:, 0], [1, 1, 2]))
+
+    def test_persistent_runner_reuses_scratch_directory(self) -> None:
+        session = FakePersistentSession()
+        runner = PersistentBpuModelRunner(
+            session,  # type: ignore[arg-type]
+            "refine",
+            (TensorSpec("A", (1, 2, 2, 2)), TensorSpec("B", (1, 2, 2, 2))),
+            (TensorSpec("trans", (1, 3)), TensorSpec("rot", (1, 3))),
+        )
+        a = np.zeros((1, 2, 2, 2), dtype=np.float32)
+
+        try:
+            runner.infer({"A": a, "B": a})
+            first_root = runner._tmp_root
+            runner.infer({"A": a + 1, "B": a + 2})
+            self.assertIsNotNone(first_root)
+            self.assertEqual(first_root, runner._tmp_root)
+            self.assertTrue(first_root.exists())
+            self.assertEqual(len(session.requests), 2)
+            self.assertEqual(session.requests[0]["output_dir"], session.requests[1]["output_dir"])
+        finally:
+            tmp_root = runner._tmp_root
+            runner.close()
+        if tmp_root is not None:
+            self.assertFalse(tmp_root.exists())
+
+    def test_persistent_runner_uses_configured_scratch_parent(self) -> None:
+        session = FakePersistentSession()
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(
+            "os.environ", {"FOUNDATIONPOSE_S600_BPU_SCRATCH": tmp}, clear=False
+        ):
+            runner = PersistentBpuModelRunner(
+                session,  # type: ignore[arg-type]
+                "refine",
+                (TensorSpec("A", (1, 2, 2, 2)), TensorSpec("B", (1, 2, 2, 2))),
+                (TensorSpec("trans", (1, 3)), TensorSpec("rot", (1, 3))),
+            )
+            try:
+                runner.infer({"A": np.zeros((1, 2, 2, 2), dtype=np.float32), "B": np.zeros((1, 2, 2, 2), dtype=np.float32)})
+                self.assertIsNotNone(runner._tmp_root)
+                self.assertEqual(Path(tmp), runner._tmp_root.parent)
+            finally:
+                runner.close()
 
     def test_board_demo_installs_cpu_patch_before_upstream_imports(self) -> None:
         script = Path(__file__).resolve().parents[1] / "scripts" / "run_s600_board_hybrid_demo.py"

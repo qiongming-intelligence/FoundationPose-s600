@@ -87,8 +87,8 @@ subgraphs are exported to ONNX/HBM:
 
 | Subgraph | Upstream module | BPU contract | Output |
 |---|---|---|---|
-| RefineNet | `learning/models/refine_network.py` | `A,B = (1,6,160,160)` | `trans (1,3)`, `rot (1,3)` |
-| ScoreNetMultiPair | `learning/models/score_network.py` | fixed `A,B = (L,6,160,160)` exact candidate group; L20 historical gate, L32 strict board target | `score_logit (1,L)` |
+| RefineNet | `learning/models/refine_network.py` | `A,B = (N,6,160,160)`; N1 precision baseline, N8/N16 batched throughput HBMs | `trans (N,3)`, `rot (N,3)` |
+| ScoreNetMultiPair | `learning/models/score_network.py` | fixed `A,B = (L,6,160,160)` exact candidate group; L20 fast 20-hypothesis path, L32 strict 32-hypothesis board target | `score_logit (1,L)` |
 
 `A` and `B` are crop pairs: RGB(3) + XYZ-map(3) = 6 channels, resized to 160x160.
 Rendering, depth preprocessing, crop/warp, pose decode, SE(3) composition, and
@@ -190,23 +190,40 @@ Backends:
   `foundationpose_bpu_runner` subprocess that loads selected HBMs once with
   `hbDNNInitializeFromFiles` and reuses them via `hbDNNInferV2`/UCP JSONL calls.
 
-Current validation caveat: RefineNet is exported as fixed `N=1`. Use the
-persistent runner for Refine/full modes so the HBM is loaded once instead of once
-per candidate. On HBRT 4.7.5, full Refine also needs the one-core preload shim
-because normal `model_info` fails before scheduling reaches `--core_id 1`; the
-launcher auto-enables the shim for Refine/full modes when the built `.so` exists.
-Validated E2E paths are:
+Current validation caveat: full Refine on HBRT 4.7.5 needs the one-core preload
+shim because normal `model_info` can fail before scheduling reaches `--core_id 1`;
+the launcher auto-enables the shim for Refine/full modes when the built `.so`
+exists. For runtime, use the persistent C++/UCP runner so selected HBMs are loaded
+once and reused across Refine/Score calls. Validated E2E paths are:
 
 - CPU-only board baseline: safe default for renderer/control-flow smoke.
 - `Refine CPU + Score BPU L32`: strict 32-hypothesis path matched CPU-only exactly
   on the driller smoke frame. Use strict mode with 32 hypotheses for semantic
   ScoreNet validation.
-- Full `Refine BPU + Score BPU L32`: full all-node-int16 Refine HBM + Score L32,
-  persistent backend, one-core preload; completed at 32 hypotheses with final
-  pose delta vs CPU-only `0.000803929 m / 0.496348°`.
+- Full `Refine BPU + Score BPU L32`: all-node-int16 Refine HBM + Score L32,
+  persistent backend, one-core preload. The optimized 32-hypothesis no-setup
+  board path uses `refine_net_N16` and measures `frame.register ~= 215 ms` with
+  the native placeholder crop/render path. The latest smoke pose delta vs the
+  prior OpenCV-warp path was `4.69e-05 m / 0.0562°`.
+- Full `Refine BPU + Score BPU L20`: fast 20-hypothesis option with `refine_net_N8`
+  + Score L20, persistent backend, one-core preload. It measures
+  `frame.register ~= 171 ms` on the same smoke frame. L20 vs L32 final pose was
+  effectively unchanged on that frame (`0 m / 0.0117°`, matrix max-abs `5.96e-08`),
+  but L32 remains the strict 32-hypothesis board target for semantic validation.
 - `Score BPU L20`: available again with the one-core preload (`model_info OK 8/8`)
-  and retains the 9-sample ranking gate, but L32 remains the strict 32-hypothesis
-  board target recorded here.
+  and retains the 9-sample ranking gate.
+
+These timings are setup-excluded `--profile-timing` spans using the placeholder
+host renderer. They are useful for board-side full-BPU throughput/control-flow
+work, not final ADD/ADD-S accuracy evidence.
+
+Latest one-frame driller smoke timings (`--profile-timing`, setup/preflight/model
+load excluded from `frame.register`):
+
+| Full-BPU path | Hypotheses | `frame.register` | Refine runner | Score runner | Crop/render notes |
+|---|---:|---:|---:|---:|---|
+| Refine N16 + Score L32 | 32 | **214.988 ms** | 67.975 ms across 2 calls | 56.451 ms | Refine crop 32.1 ms, Score crop 27.3 ms, render 23.1 ms |
+| Refine N8 + Score L20 | 20 | **171.107 ms** | 57.632 ms across 3 calls | 36.336 ms | Refine crop 25.2 ms, Score crop 21.0 ms, render 18.6 ms |
 
 Recommended board smoke commands:
 
@@ -236,24 +253,39 @@ PYTHONPATH=src/python:.deps/s600-foundationpose \
   --score-bpu-mode smoke-pad \
   --score-hbm models/hbm_real_int16/foundationpose_score_net_L32_real_int16_no_output.hbm
 
-# Strict full-BPU path: full all-node Refine HBM + Score L32 through the
-# persistent runner. The launcher auto-enables the one-core preload shim for
+# Strict full-BPU 32-hypothesis path: batched Refine N16 + Score L32 through
+# the persistent runner. The launcher auto-enables the one-core preload shim for
 # Refine/full modes when build/cmake/src/csrc/libfoundationpose_bpu_core1_preload.so exists.
 PYTHONPATH=src/python:.deps/s600-foundationpose \
 /home/sunrise/miniconda3/envs/sam3-export/bin/python src/python/scripts/run_s600_board_hybrid_demo.py \
   --bpu-mode full --bpu-runtime persistent \
   --max-hypotheses 32 --renderer-splat-radius 0 \
-  --refine-hbm models/hbm_real_int16/foundationpose_refine_net_real_int16_no_output.hbm \
+  --refine-partition refine_net_N16 \
+  --refine-hbm models/hbm_real_int16_batch/foundationpose_refine_net_N16.hbm \
   --score-chunk-size 32 --score-partition score_net_L32 \
   --score-bpu-mode strict \
-  --score-hbm models/hbm_real_int16/foundationpose_score_net_L32_real_int16_no_output.hbm
+  --score-hbm models/hbm_real_int16/foundationpose_score_net_L32_real_int16_no_output.hbm \
+  --profile-timing
+
+# Faster 20-hypothesis path: batched Refine N8 + Score L20. This is useful for
+# deployment throughput experiments; keep L32/32 for strict 32-candidate ScoreNet validation.
+PYTHONPATH=src/python:.deps/s600-foundationpose \
+/home/sunrise/miniconda3/envs/sam3-export/bin/python src/python/scripts/run_s600_board_hybrid_demo.py \
+  --bpu-mode full --bpu-runtime persistent \
+  --max-hypotheses 20 --renderer-splat-radius 0 \
+  --refine-partition refine_net_N8 \
+  --refine-hbm models/hbm_real_int16_batch/foundationpose_refine_net_N8.hbm \
+  --score-chunk-size 20 --score-partition score_net_L20 \
+  --score-bpu-mode strict \
+  --score-hbm models/hbm_real_int16/foundationpose_score_net_L20_real_int16_no_output.hbm \
+  --profile-timing
 ```
 
 Full Refine+Score BPU at normal hypothesis counts should use the persistent
 C++/UCP runner. On HBRT 4.7.5, keep preflight enabled and use the one-core
-preload shim for the full Refine HBM so `model_info` validates only the selected
-single-core deployment path. Adding Refine `N>1` is a later throughput
-optimization, not the root fix for per-call reloads.
+preload shim so `model_info` validates only the selected single-core deployment
+path. Refine `N>1` HBMs reduce repeated Refine calls; ScoreNet remains fixed-L,
+so candidate count must match the selected Score HBM for semantic validation.
 
 ## Repository layout
 

@@ -17,10 +17,12 @@ BpuBackend = Literal["hrt", "persistent"]
 class RefineNetBpu:
     """Callable RefineNet replacement returning ``{'trans': ..., 'rot': ...}``.
 
-    The deployable RefineNet contract is currently fixed at batch N=1. If callers
-    pass N>1, this adapter runs the HBM once per sample and concatenates outputs.
-    Input tail shape and output widths are read from the selected contract, so
-    variants such as ``rot_dim=6`` remain compatible.
+    The default RefineNet contract is fixed at batch N=1, but batched variants
+    such as ``refine_net_N32`` are also supported. If callers pass a batch larger
+    than the compiled N, this adapter chunks inputs by the contract N, pads only
+    the final partial chunk, and clips padded outputs. Input tail shape and output
+    widths are read from the selected contract, so variants such as ``rot_dim=6``
+    remain compatible.
 
     With ``backend='hrt'`` every sample goes through ``hrt_model_exec`` and
     reloads the HBM; with ``backend='persistent'`` the same per-sample loop reuses
@@ -103,14 +105,14 @@ class RefineNetBpu:
         self.contract_input_shape = a_shape
         self.contract_n = int(a_shape[0])
         self.contract_tail_shape = a_shape[1:]
-        if self.contract_n != 1:
-            raise ValueError(f"RefineNetBpu expects an N=1 compiled contract for per-sample looping; {self.partition} has N={self.contract_n}")
+        if self.contract_n <= 0:
+            raise ValueError(f"RefineNet contract N must be positive, got {self.contract_n}")
         self.trans_shape = tuple(int(x) for x in output_specs["trans"].shape)
         self.rot_shape = tuple(int(x) for x in output_specs["rot"].shape)
-        if not self.trans_shape or self.trans_shape[0] != 1:
-            raise ValueError(f"RefineNet trans output must have batch 1 for per-sample looping, got {self.trans_shape}")
-        if not self.rot_shape or self.rot_shape[0] != 1:
-            raise ValueError(f"RefineNet rot output must have batch 1 for per-sample looping, got {self.rot_shape}")
+        if not self.trans_shape or self.trans_shape[0] != self.contract_n:
+            raise ValueError(f"RefineNet trans output batch must match contract N={self.contract_n}, got {self.trans_shape}")
+        if not self.rot_shape or self.rot_shape[0] != self.contract_n:
+            raise ValueError(f"RefineNet rot output batch must match contract N={self.contract_n}, got {self.rot_shape}")
 
     def _validate_inputs(self, A: object, B: object) -> tuple[np.ndarray, np.ndarray]:
         a = as_float32_nchw(A)
@@ -142,10 +144,22 @@ class RefineNetBpu:
         outs: dict[str, list[np.ndarray]] = {"trans": [], "rot": []}
         trans_tail = self.trans_shape[1:]
         rot_tail = self.rot_shape[1:]
-        for i in range(int(a.shape[0])):
-            got = self.runner.infer({"A": a[i : i + 1], "B": b[i : i + 1]})
-            outs["trans"].append(np.asarray(got["trans"], dtype=np.float32).reshape((1, *trans_tail)))
-            outs["rot"].append(np.asarray(got["rot"], dtype=np.float32).reshape((1, *rot_tail)))
+        chunk_n = self.contract_n
+        total = int(a.shape[0])
+        for start in range(0, total, chunk_n):
+            end = min(start + chunk_n, total)
+            valid = end - start
+            a_run = a[start:end]
+            b_run = b[start:end]
+            if valid < chunk_n:
+                pad_shape = (chunk_n - valid, *self.contract_tail_shape)
+                a_run = np.concatenate([a_run, np.zeros(pad_shape, dtype=np.float32)], axis=0)
+                b_run = np.concatenate([b_run, np.zeros(pad_shape, dtype=np.float32)], axis=0)
+            got = self.runner.infer({"A": a_run, "B": b_run})
+            trans = np.asarray(got["trans"], dtype=np.float32).reshape((chunk_n, *trans_tail))[:valid]
+            rot = np.asarray(got["rot"], dtype=np.float32).reshape((chunk_n, *rot_tail))[:valid]
+            outs["trans"].append(trans)
+            outs["rot"].append(rot)
         return {name: np.concatenate(parts, axis=0).astype(np.float32, copy=False) for name, parts in outs.items()}
 
     def __call__(self, A: object, B: object) -> dict[str, object]:

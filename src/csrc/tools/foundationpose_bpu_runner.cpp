@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <climits>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -353,6 +354,37 @@ void ReadTensorFile(const fs::path& path, BpuTensorBuffer& tensor) {
   tensor.buffer.CleanCache();
 }
 
+void WriteCompactTensorRecursive(std::ofstream& output,
+                                 const std::uint8_t* base,
+                                 const TensorInfo& info,
+                                 std::size_t dim,
+                                 std::uint64_t offset_bytes,
+                                 std::uint64_t element_bytes) {
+  if (dim + 1 == info.shape.dims.size()) {
+    const auto count = static_cast<std::uint64_t>(info.shape.dims[dim]);
+    const auto bytes = CheckedMul(count, element_bytes);
+    output.write(reinterpret_cast<const char*>(base + offset_bytes), static_cast<std::streamsize>(bytes));
+    return;
+  }
+  const auto count = static_cast<std::uint64_t>(info.shape.dims[dim]);
+  const auto stride = static_cast<std::uint64_t>(info.stride[dim]);
+  for (std::uint64_t i = 0; i < count; ++i) {
+    WriteCompactTensorRecursive(output, base, info, dim + 1, offset_bytes + CheckedMul(i, stride), element_bytes);
+  }
+}
+
+bool HasUsableStride(const TensorInfo& info) {
+  if (info.shape.dims.empty() || info.stride.size() != info.shape.dims.size()) {
+    return false;
+  }
+  for (std::size_t i = 0; i < info.shape.dims.size(); ++i) {
+    if (info.shape.dims[i] < 0 || info.stride[i] < 0) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void WriteTensorFile(const fs::path& path, const BpuTensorBuffer& tensor) {
   const auto bytes = TensorValidBytes(tensor.info);
   if (bytes > tensor.buffer.Size()) {
@@ -366,7 +398,12 @@ void WriteTensorFile(const fs::path& path, const BpuTensorBuffer& tensor) {
   if (!output) {
     throw std::runtime_error("failed to open output tensor: " + path.string());
   }
-  output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+  const auto element_bytes = DTypeBytes(tensor.info.dtype);
+  if (HasUsableStride(tensor.info) && element_bytes != 0) {
+    WriteCompactTensorRecursive(output, data, tensor.info, 0, 0, element_bytes);
+  } else {
+    output.write(reinterpret_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+  }
   if (!output) {
     throw std::runtime_error("failed to write output tensor: " + path.string());
   }

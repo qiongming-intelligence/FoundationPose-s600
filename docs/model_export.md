@@ -18,9 +18,11 @@ PYTHONPATH=src/python python3 -m foundationpose_s600_tools.export.contract \
 ```
 
 Flags: `--image-size` (crop H=W, default 160), `--c-in` (6 = rgb+xyz shipped,
-4 = legacy rgb+depth), `--rot-dim` (3 axis_angle / 6 6d), `--score-pairs`
-(repeatable L values; default emits L20 historical real-tensor gate target and L32
-strict board target), `--partition` (subset).
+4 = legacy rgb+depth), `--rot-dim` (3 axis_angle / 6 6d), `--refine-batch`
+(repeatable N values; default emits `refine_net` with N=1, use `--refine-batch 32`
+for a batched `refine_net_N32` throughput candidate), `--score-pairs` (repeatable
+L values; default emits L20 historical real-tensor gate target and L32 strict
+board target), `--partition` (subset).
 
 ### Verified upstream signatures (pinned SHA, see docs/upstream_pin.md)
 

@@ -200,7 +200,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         for i in range(n):
             sdir = pack / f"sample_{i:06d}"
             gots = run_persistent_hbm(runner, sdir) if runner is not None else run_hbm(hbm, sdir, input_names, len(out_names), args.core_id)
-            if args.partition == "refine_net":
+            if args.partition.startswith("refine_net"):
                 rec: dict[str, Any] = {"sample": i}
                 for name, got in zip(out_names, gots):
                     ref = np.load(sdir / f"golden_{name}.npy").reshape(-1)
@@ -217,7 +217,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
         if runner is not None:
             runner.session.close()
 
-    if args.partition == "refine_net":
+    if args.partition.startswith("refine_net"):
         for name in out_names:
             ma = [r[name]["max_abs"] for r in records]
             l2 = [r[name]["l2"] for r in records]
